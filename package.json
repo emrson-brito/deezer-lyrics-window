@@ -1,0 +1,34 @@
+{
+  "name": "deezer-lyrics-window",
+  "version": "1.0.0",
+  "description": "Uma janela flutuante que exibe letras de músicas tocadas no Deezer",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "electron-builder"
+  },
+  "keywords": [
+    "deezer",
+    "lyrics",
+    "electron",
+    "music"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "dependencies": {
+    "axios": "^1.6.2"
+  },
+  "build": {
+    "appId": "com.deezer.lyrics.window",
+    "productName": "Deezer Lyrics Window",
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico"
+    }
+  }
+}
