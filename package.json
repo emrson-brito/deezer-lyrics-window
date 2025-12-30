@@ -28,7 +28,7 @@
     "productName": "Deezer Lyrics Window",
     "win": {
       "target": "nsis",
-      "icon": "assets/icon.ico"
+      "icon": "favicon.ico"
     }
   }
 }
