@@ -16,7 +16,7 @@ function createWindow() {
     resizable: true,
     transparent: true,
     opacity: 0.95,
-    icon: path.join(__dirname, 'assets', 'icon.png'),
+    icon: path.join(__dirname, 'favicon.ico'),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
