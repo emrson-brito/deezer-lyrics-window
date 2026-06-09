@@ -1,86 +1,160 @@
 const { EventEmitter } = require('events');
-const { exec } = require('child_process');
+const { spawn } = require('child_process');
+const readline = require('readline');
 const path = require('path');
 
 /**
- * Monitora o aplicativo Deezer e detecta mudanças de música
- * Usa a Windows Media Session API via PowerShell
+ * Monitora o aplicativo Deezer e detecta mudanças de música.
+ *
+ * Em vez de relançar o PowerShell a cada poll (o que sobrecarregava a CPU),
+ * mantém UM ÚNICO processo PowerShell persistente que inicializa a Windows
+ * Media Session API uma vez e emite uma linha JSON por intervalo.
+ *
+ * A posição de reprodução é interpolada em JavaScript (aritmética pura) entre
+ * as leituras reais, então as letras sincronizadas continuam suaves sem custo.
  */
 class DeezerMonitor extends EventEmitter {
   constructor() {
     super();
     this.currentTrack = null;
-    this.intervalId = null;
-    this.checkInterval = 500;
     this.psScriptPath = path.join(__dirname, 'getMediaInfo.ps1');
+
+    // Intervalo de leitura real do PowerShell (ms)
+    this.pollIntervalMs = 1000;
+
+    // Processo e estado de ciclo de vida
+    this.psProcess = null;
+    this.stopping = false;
+    this.restartTimer = null;
+
+    // Estado para interpolação de posição
+    this.lastPosition = 0;
+    this.lastPositionAt = 0;
+    this.isPlaying = false;
+    this.positionTimer = null;
+    this.positionTickMs = 250;
   }
 
   /**
    * Inicia o monitoramento
    */
   start() {
-    console.log('Iniciando monitoramento via Windows Media API...');
-    this.intervalId = setInterval(() => {
-      this.checkMediaInfo();
-    }, this.checkInterval);
-    
-    // Verificar imediatamente
-    this.checkMediaInfo();
+    console.log('Iniciando monitoramento via Windows Media API (processo persistente)...');
+    this.stopping = false;
+    this.spawnProcess();
+    this.startPositionInterpolation();
   }
 
   /**
-   * Para o monitoramento
+   * Para o monitoramento e encerra o processo PowerShell
    */
   stop() {
-    if (this.intervalId) {
-      clearInterval(this.intervalId);
-      this.intervalId = null;
-      console.log('Monitoramento parado');
+    this.stopping = true;
+
+    if (this.positionTimer) {
+      clearInterval(this.positionTimer);
+      this.positionTimer = null;
+    }
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    if (this.psProcess) {
+      this.psProcess.kill();
+      this.psProcess = null;
+    }
+
+    console.log('Monitoramento parado');
+  }
+
+  /**
+   * Sobe o processo PowerShell persistente e conecta a leitura de stdout
+   */
+  spawnProcess() {
+    this.psProcess = spawn(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', this.psScriptPath,
+        '-IntervalMs', String(this.pollIntervalMs)
+      ],
+      { windowsHide: true }
+    );
+
+    const rl = readline.createInterface({ input: this.psProcess.stdout });
+    rl.on('line', (line) => this.handleLine(line));
+
+    this.psProcess.on('error', (err) => {
+      console.error('Erro no processo PowerShell:', err.message);
+    });
+
+    this.psProcess.on('exit', (code) => {
+      this.psProcess = null;
+      if (!this.stopping) {
+        console.warn(`Processo PowerShell encerrou (código ${code}); reiniciando em 2s...`);
+        this.restartTimer = setTimeout(() => this.spawnProcess(), 2000);
+      }
+    });
+  }
+
+  /**
+   * Processa uma linha JSON emitida pelo PowerShell
+   */
+  handleLine(line) {
+    const text = line.trim();
+    if (!text) return;
+
+    let mediaInfo;
+    try {
+      mediaInfo = JSON.parse(text);
+    } catch (parseError) {
+      return;
+    }
+
+    // Sem mídia ou mídia não-Deezer
+    if (!mediaInfo || !mediaInfo.Source || !mediaInfo.Source.toLowerCase().includes('deezer')) {
+      if (this.currentTrack !== null) {
+        this.currentTrack = null;
+        this.isPlaying = false;
+        console.log('Nenhuma mídia do Deezer tocando');
+      }
+      return;
+    }
+
+    const trackInfo = {
+      title: mediaInfo.Title || 'Desconhecido',
+      artist: mediaInfo.Artist || 'Desconhecido',
+      album: mediaInfo.Album || ''
+    };
+
+    if (this.hasTrackChanged(trackInfo)) {
+      this.currentTrack = trackInfo;
+      console.log('✓ Nova música detectada:', trackInfo);
+      this.emit('trackChanged', trackInfo);
+    }
+
+    // Atualiza a base de interpolação com a leitura real
+    this.isPlaying = mediaInfo.Status === 'Playing';
+
+    if (mediaInfo.Position !== undefined && mediaInfo.Position !== null) {
+      this.lastPosition = mediaInfo.Position;
+      this.lastPositionAt = Date.now();
+      // Correção imediata da posição na UI
+      this.emit('positionUpdate', this.lastPosition);
     }
   }
 
   /**
-   * Verifica informações de mídia via Windows Media API
+   * Emite atualizações de posição interpoladas entre as leituras reais.
+   * É apenas aritmética — sem processos nem chamadas de sistema.
    */
-  checkMediaInfo() {
-    const psCommand = `powershell.exe -ExecutionPolicy Bypass -File "${this.psScriptPath}"`;
-    
-    exec(psCommand, { encoding: 'utf8', timeout: 5000 }, (error, stdout, stderr) => {
-      if (error || !stdout.trim()) {
-        // Sem mídia tocando ou erro
-        if (this.currentTrack !== null) {
-          this.currentTrack = null;
-          console.log('Nenhuma mídia tocando');
-        }
-        return;
-      }
-
-      try {
-        const mediaInfo = JSON.parse(stdout.trim());
-        
-        // Verificar se é do Deezer
-        if (mediaInfo.Source && mediaInfo.Source.toLowerCase().includes('deezer')) {
-          const trackInfo = {
-            title: mediaInfo.Title || 'Desconhecido',
-            artist: mediaInfo.Artist || 'Desconhecido',
-            album: mediaInfo.Album || ''
-          };
-
-          if (this.hasTrackChanged(trackInfo)) {
-            this.currentTrack = trackInfo;
-            console.log('✓ Nova música detectada:', trackInfo);
-            this.emit('trackChanged', trackInfo);
-          }
-          
-          // Emitir atualização de posição para sincronização
-          if (mediaInfo.Position !== undefined) {
-            this.emit('positionUpdate', mediaInfo.Position);
-          }
-        }
-      } catch (parseError) {
-        console.error('Erro ao parsear JSON:', parseError.message);
-      }
-    });
+  startPositionInterpolation() {
+    this.positionTimer = setInterval(() => {
+      if (!this.isPlaying || !this.lastPositionAt) return;
+      const elapsed = (Date.now() - this.lastPositionAt) / 1000;
+      this.emit('positionUpdate', this.lastPosition + elapsed);
+    }, this.positionTickMs);
   }
 
   /**

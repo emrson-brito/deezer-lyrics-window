@@ -8,6 +8,7 @@ const closeButton = document.getElementById('closeButton');
 let isPinned = true;
 let currentLyrics = null;
 let currentPosition = 0;
+let currentActiveIndex = -1;
 
 // Atualizar letras quando houver mudança
 window.electronAPI.onLyricsUpdate((data) => {
@@ -18,7 +19,8 @@ window.electronAPI.onLyricsUpdate((data) => {
   trackArtist.textContent = trackInfo.artist || 'Artista desconhecido';
   
   currentLyrics = lyrics;
-  
+  currentActiveIndex = -1; // Reset do destaque ao trocar de música
+
   // Verificar se é letra sincronizada
   if (lyrics.synced && lyrics.lines && lyrics.lines.length > 0) {
     console.log('✓ Exibindo letra sincronizada');
@@ -76,42 +78,25 @@ function renderSyncedLyrics(lines) {
 function updateSyncedLyrics(position) {
   const lines = document.querySelectorAll('.lyric-line');
   if (lines.length === 0) return;
-  
-  const countdownContainer = document.querySelector('.countdown-container');
-  const countdownTimer = document.querySelector('.countdown-timer');
-  const countdownProgressFill = document.querySelector('.countdown-progress-fill');
+
   const firstLineTime = parseFloat(lines[0].getAttribute('data-time'));
-  
+
   // Se ainda não chegou na primeira linha, mostrar contador
   if (position < firstLineTime) {
-    const timeUntilStart = firstLineTime - position;
-    const minutes = Math.floor(timeUntilStart / 60);
-    const seconds = Math.floor(timeUntilStart % 60);
-    
-    if (countdownContainer && countdownTimer) {
-      countdownContainer.style.display = 'flex';
-      countdownTimer.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
-      
-      // Atualizar barra de progresso
-      if (countdownProgressFill) {
-        const progressPercentage = (timeUntilStart / firstLineTime) * 100;
-        countdownProgressFill.style.width = `${progressPercentage}%`;
-      }
+    updateCountdown(position, firstLineTime);
+
+    // Limpar destaque se houver
+    if (currentActiveIndex >= 0 && lines[currentActiveIndex]) {
+      lines[currentActiveIndex].classList.remove('active');
+      currentActiveIndex = -1;
     }
-    
-    // Esconder todas as linhas
-    lines.forEach(line => line.classList.remove('active'));
     return;
   }
-  
-  // Esconder contador quando a letra começar
-  if (countdownContainer) {
-    countdownContainer.style.display = 'none';
-  }
-  
-  let activeIndex = -1;
-  
+
+  hideCountdown();
+
   // Encontrar a linha atual baseada na posição
+  let activeIndex = -1;
   for (let i = 0; i < lines.length; i++) {
     const lineTime = parseFloat(lines[i].getAttribute('data-time'));
     if (position >= lineTime) {
@@ -120,27 +105,63 @@ function updateSyncedLyrics(position) {
       break;
     }
   }
-  
-  // Remover classe active de todas as linhas
-  lines.forEach(line => {
-    line.classList.remove('active');
-  });
-  
-  // Adicionar classe active na linha atual
+
+  // Nada mudou: evita repaint, recálculo de layout e re-disparo do scroll suave
+  if (activeIndex === currentActiveIndex) return;
+
+  // Tirar o destaque apenas da linha anterior
+  if (currentActiveIndex >= 0 && lines[currentActiveIndex]) {
+    lines[currentActiveIndex].classList.remove('active');
+  }
+  currentActiveIndex = activeIndex;
+
+  // Destacar a nova linha ativa
   if (activeIndex >= 0) {
     const activeLine = lines[activeIndex];
     activeLine.classList.add('active');
-    
+
     // Auto-scroll para centralizar a linha ativa
     const containerHeight = lyricsContainer.clientHeight;
-    const lineTop = activeLine.offsetTop;
-    const lineHeight = activeLine.clientHeight;
-    const scrollTo = lineTop - (containerHeight / 2) + (lineHeight / 2);
-    
+    const scrollTo = activeLine.offsetTop - (containerHeight / 2) + (activeLine.clientHeight / 2);
+
     lyricsContainer.scrollTo({
       top: scrollTo,
       behavior: 'smooth'
     });
+  }
+}
+
+// Atualiza a contagem regressiva antes da primeira linha
+let lastCountdownLabel = '';
+function updateCountdown(position, firstLineTime) {
+  const countdownContainer = document.querySelector('.countdown-container');
+  const countdownTimer = document.querySelector('.countdown-timer');
+  const countdownProgressFill = document.querySelector('.countdown-progress-fill');
+  if (!countdownContainer || !countdownTimer) return;
+
+  countdownContainer.style.display = 'flex';
+
+  const timeUntilStart = firstLineTime - position;
+  const minutes = Math.floor(timeUntilStart / 60);
+  const seconds = Math.floor(timeUntilStart % 60);
+  const label = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+
+  // Só escreve no DOM quando o segundo exibido muda
+  if (label !== lastCountdownLabel) {
+    countdownTimer.textContent = label;
+    lastCountdownLabel = label;
+  }
+
+  if (countdownProgressFill) {
+    const progressPercentage = (timeUntilStart / firstLineTime) * 100;
+    countdownProgressFill.style.width = `${progressPercentage}%`;
+  }
+}
+
+function hideCountdown() {
+  const countdownContainer = document.querySelector('.countdown-container');
+  if (countdownContainer && countdownContainer.style.display !== 'none') {
+    countdownContainer.style.display = 'none';
   }
 }
 
