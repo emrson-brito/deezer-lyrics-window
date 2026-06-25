@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onPositionUpdate: (callback) => {
     ipcRenderer.on('position-update', (event, position) => callback(position));
   },
+  refreshLyrics: () => ipcRenderer.invoke('refresh-lyrics'),
   toggleAlwaysOnTop: () => ipcRenderer.invoke('toggle-always-on-top'),
   minimizeWindow: () => ipcRenderer.invoke('minimize-window'),
   closeWindow: () => ipcRenderer.invoke('close-window')

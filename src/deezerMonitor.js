@@ -27,6 +27,13 @@ class DeezerMonitor extends EventEmitter {
     this.stopping = false;
     this.restartTimer = null;
 
+    // Watchdog: se o PowerShell parar de emitir linhas (ex.: trava em transição
+    // de faixa), reiniciamos o processo para o app não "morrer".
+    this.lastLineAt = 0;
+    this.watchdogTimer = null;
+    this.watchdogIntervalMs = 2000;
+    this.staleThresholdMs = 6000;
+
     // Estado para interpolação de posição
     this.lastPosition = 0;
     this.lastPositionAt = 0;
@@ -41,8 +48,10 @@ class DeezerMonitor extends EventEmitter {
   start() {
     console.log('Iniciando monitoramento via Windows Media API (processo persistente)...');
     this.stopping = false;
+    this.lastLineAt = Date.now();
     this.spawnProcess();
     this.startPositionInterpolation();
+    this.startWatchdog();
   }
 
   /**
@@ -54,6 +63,10 @@ class DeezerMonitor extends EventEmitter {
     if (this.positionTimer) {
       clearInterval(this.positionTimer);
       this.positionTimer = null;
+    }
+    if (this.watchdogTimer) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
     }
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
@@ -102,6 +115,9 @@ class DeezerMonitor extends EventEmitter {
    * Processa uma linha JSON emitida pelo PowerShell
    */
   handleLine(line) {
+    // Qualquer linha recebida prova que o PowerShell está vivo e respondendo.
+    this.lastLineAt = Date.now();
+
     const text = line.trim();
     if (!text) return;
 
@@ -155,6 +171,28 @@ class DeezerMonitor extends EventEmitter {
       const elapsed = (Date.now() - this.lastPositionAt) / 1000;
       this.emit('positionUpdate', this.lastPosition + elapsed);
     }, this.positionTickMs);
+  }
+
+  /**
+   * Watchdog: se o PowerShell ficar mudo por tempo demais (trava em transição de
+   * faixa, por exemplo), mata o processo. O handler de 'exit' cuida do restart.
+   */
+  startWatchdog() {
+    this.watchdogTimer = setInterval(() => {
+      if (this.stopping || !this.psProcess) return;
+      if (Date.now() - this.lastLineAt > this.staleThresholdMs) {
+        console.warn('Watchdog: PowerShell travado (sem dados). Reiniciando...');
+        this.lastLineAt = Date.now(); // evita matar em sequência durante o restart
+        this.psProcess.kill();
+      }
+    }, this.watchdogIntervalMs);
+  }
+
+  /**
+   * Faixa atual conhecida (usada pelo refresh manual de letra)
+   */
+  getCurrentTrack() {
+    return this.currentTrack;
   }
 
   /**

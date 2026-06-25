@@ -38,8 +38,13 @@ class LyricsService {
       // Fallback: buscar letra simples
       const simpleLyrics = await this.getSimpleLyrics(cleanArtist, cleanTitle);
       return simpleLyrics;
-      
+
     } catch (error) {
+      // "Letra não encontrada" é um estado NORMAL, não um erro: não deve disparar
+      // a tela de erro nem deixar o app preso. Retornamos um resultado vazio.
+      if (error.notFound || (error.response && error.response.status === 404)) {
+        return { synced: false, plain: null, lines: [], notFound: true };
+      }
       throw new Error(`Erro ao buscar letra: ${error.message}`);
     }
   }
@@ -84,7 +89,9 @@ class LyricsService {
       };
     }
 
-    throw new Error('Letra não encontrada');
+    const notFound = new Error('Letra não encontrada');
+    notFound.notFound = true;
+    throw notFound;
   }
 
   /**

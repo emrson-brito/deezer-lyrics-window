@@ -2,6 +2,7 @@ const trackTitle = document.getElementById('trackTitle');
 const trackArtist = document.getElementById('trackArtist');
 const lyricsContainer = document.getElementById('lyricsContainer');
 const pinButton = document.getElementById('pinButton');
+const refreshButton = document.getElementById('refreshButton');
 const minimizeButton = document.getElementById('minimizeButton');
 const closeButton = document.getElementById('closeButton');
 
@@ -52,7 +53,11 @@ window.electronAPI.onLyricsError((data) => {
   
   trackTitle.textContent = trackInfo.title || 'Música desconhecida';
   trackArtist.textContent = trackInfo.artist || 'Artista desconhecido';
-  
+
+  // Limpa o estado da letra anterior para não ficar preso ao trocar de música
+  currentLyrics = null;
+  currentActiveIndex = -1;
+
   lyricsContainer.innerHTML = `<div class="error-message"><p>Erro ao buscar letra:<br>${escapeHtml(error)}</p></div>`;
 });
 
@@ -170,6 +175,20 @@ pinButton.addEventListener('click', async () => {
   isPinned = await window.electronAPI.toggleAlwaysOnTop();
   pinButton.classList.toggle('pinned', isPinned);
   pinButton.title = isPinned ? 'Fixado no topo' : 'Não fixado';
+});
+
+// Recarregar letra manualmente (fallback caso algo tenha falhado)
+refreshButton.addEventListener('click', async () => {
+  refreshButton.classList.add('spinning');
+  lyricsContainer.innerHTML = '<div class="loading"></div>';
+  try {
+    const ok = await window.electronAPI.refreshLyrics();
+    if (!ok) {
+      lyricsContainer.innerHTML = '<div class="waiting-message"><p>Nenhuma música tocando no Deezer.</p></div>';
+    }
+  } finally {
+    setTimeout(() => refreshButton.classList.remove('spinning'), 500);
+  }
 });
 
 // Window controls
