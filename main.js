@@ -2,10 +2,23 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const DeezerMonitor = require('./src/deezerMonitor');
 const LyricsService = require('./src/lyricsService');
+const TranslationService = require('./src/translationService');
 
 let mainWindow;
 let deezerMonitor;
 let lyricsService;
+let translationService;
+let translationEnabled = true;
+
+// Última letra recebida, para retraduzir quando a tradução é reativada
+let currentTrackInfo = null;
+let currentLyrics = null;
+
+// Chave da faixa: o renderer usa para descartar traduções que chegam atrasadas
+// depois de uma troca de música.
+function trackKeyOf(trackInfo) {
+  return `${trackInfo.artist} - ${trackInfo.title}`;
+}
 
 // Busca e envia a letra de uma faixa (usado na troca de música e no refresh manual)
 async function fetchAndSendLyrics(trackInfo) {
@@ -13,14 +26,46 @@ async function fetchAndSendLyrics(trackInfo) {
   try {
     const lyrics = await lyricsService.getLyrics(trackInfo.artist, trackInfo.title);
 
+    currentTrackInfo = trackInfo;
+    currentLyrics = lyrics;
+
     if (mainWindow) {
       mainWindow.webContents.send('lyrics-update', { trackInfo, lyrics });
     }
+
+    // A tradução roda depois do envio da letra: a letra aparece na hora e a
+    // tradução é preenchida quando estiver pronta.
+    fetchAndSendTranslation(trackInfo, lyrics);
   } catch (error) {
     console.error('Erro ao buscar letra:', error);
     if (mainWindow) {
       mainWindow.webContents.send('lyrics-error', { trackInfo, error: error.message });
     }
+  }
+}
+
+// Traduz a letra e envia ao renderer (nunca bloqueia nem derruba a exibição)
+async function fetchAndSendTranslation(trackInfo, lyrics) {
+  if (!translationEnabled || !translationService || !trackInfo || !lyrics) return;
+
+  const texts = lyrics.synced && lyrics.lines && lyrics.lines.length > 0
+    ? lyrics.lines.map((line) => line.text)
+    : (lyrics.plain ? lyrics.plain.split('\n') : []);
+
+  if (texts.length === 0) return;
+
+  try {
+    const { detectedLang, translations } = await translationService.translateLines(texts);
+
+    if (!mainWindow) return;
+
+    mainWindow.webContents.send('translation-update', {
+      trackKey: trackKeyOf(trackInfo),
+      detectedLang,
+      translations
+    });
+  } catch (error) {
+    console.error('Erro ao traduzir letra:', error.message);
   }
 }
 
@@ -53,6 +98,7 @@ app.whenReady().then(() => {
   
   // Inicializar serviços
   lyricsService = new LyricsService();
+  translationService = new TranslationService('pt-BR');
   deezerMonitor = new DeezerMonitor();
   
   // Monitorar mudanças de música
@@ -115,4 +161,15 @@ ipcMain.handle('refresh-lyrics', async () => {
   if (!trackInfo) return false;
   await fetchAndSendLyrics(trackInfo);
   return true;
+});
+
+// Liga/desliga a tradução. Ao ligar, traduz a letra já exibida sem rebuscá-la.
+ipcMain.handle('set-translation-enabled', async (event, enabled) => {
+  translationEnabled = Boolean(enabled);
+
+  if (translationEnabled && currentTrackInfo && currentLyrics) {
+    fetchAndSendTranslation(currentTrackInfo, currentLyrics);
+  }
+
+  return translationEnabled;
 });

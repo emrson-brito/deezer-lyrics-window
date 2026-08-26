@@ -3,6 +3,7 @@ const trackArtist = document.getElementById('trackArtist');
 const lyricsContainer = document.getElementById('lyricsContainer');
 const pinButton = document.getElementById('pinButton');
 const refreshButton = document.getElementById('refreshButton');
+const translateButton = document.getElementById('translateButton');
 const minimizeButton = document.getElementById('minimizeButton');
 const closeButton = document.getElementById('closeButton');
 
@@ -11,16 +12,21 @@ let currentLyrics = null;
 let currentPosition = 0;
 let currentActiveIndex = -1;
 
+// Chave da faixa exibida: traduções que chegam atrasadas (de uma música que já
+// trocou) são descartadas.
+let currentTrackKey = null;
+
 // Atualizar letras quando houver mudança
 window.electronAPI.onLyricsUpdate((data) => {
   const { trackInfo, lyrics } = data;
-  
+
   // Atualizar informações da música
   trackTitle.textContent = trackInfo.title || 'Música desconhecida';
   trackArtist.textContent = trackInfo.artist || 'Artista desconhecido';
-  
+
   currentLyrics = lyrics;
   currentActiveIndex = -1; // Reset do destaque ao trocar de música
+  currentTrackKey = `${trackInfo.artist} - ${trackInfo.title}`;
 
   // Verificar se é letra sincronizada
   if (lyrics.synced && lyrics.lines && lyrics.lines.length > 0) {
@@ -28,7 +34,7 @@ window.electronAPI.onLyricsUpdate((data) => {
     renderSyncedLyrics(lyrics.lines);
   } else if (lyrics.plain) {
     console.log('Exibindo letra simples');
-    lyricsContainer.innerHTML = `<div class="lyrics-text">${escapeHtml(lyrics.plain)}</div>`;
+    renderPlainLyrics(lyrics.plain);
   } else {
     lyricsContainer.innerHTML = '<div class="waiting-message"><p>Letra não encontrada</p></div>';
   }
@@ -61,12 +67,36 @@ window.electronAPI.onLyricsError((data) => {
   lyricsContainer.innerHTML = `<div class="error-message"><p>Erro ao buscar letra:<br>${escapeHtml(error)}</p></div>`;
 });
 
+// Aplicar tradução recebida sobre a letra já exibida
+window.electronAPI.onTranslationUpdate((data) => {
+  const { trackKey, translations } = data;
+
+  // Tradução de outra música (chegou depois da troca de faixa)
+  if (trackKey !== currentTrackKey) return;
+
+  // Letra já está em português: nada a mostrar
+  if (!translations) return;
+
+  const targets = document.querySelectorAll('.lyric-translation');
+  targets.forEach((target) => {
+    const index = parseInt(target.getAttribute('data-index'), 10);
+    const translated = translations[index];
+    if (!translated) return;
+
+    target.textContent = translated;
+    target.classList.add('visible');
+  });
+});
+
 // Renderizar letras sincronizadas
 function renderSyncedLyrics(lines) {
   const html = lines.map((line, index) => {
-    return `<div class="lyric-line" data-time="${line.time}" data-index="${index}">${escapeHtml(line.text)}</div>`;
+    return `<div class="lyric-line" data-time="${line.time}" data-index="${index}">` +
+      `<span class="lyric-original">${escapeHtml(line.text)}</span>` +
+      `<span class="lyric-translation" data-index="${index}"></span>` +
+      `</div>`;
   }).join('');
-  
+
   lyricsContainer.innerHTML = `
     <div class="countdown-container" style="display: none;">
       <div class="countdown-text">A letra começa em</div>
@@ -77,6 +107,23 @@ function renderSyncedLyrics(lines) {
     </div>
     <div class="lyrics-synced">${html}</div>
   `;
+}
+
+// Renderizar letra simples (sem sincronia) linha a linha, para que a tradução
+// possa ser encaixada sob cada verso
+function renderPlainLyrics(plain) {
+  const html = plain.split('\n').map((text, index) => {
+    if (!text.trim()) {
+      return '<div class="plain-line empty"></div>';
+    }
+
+    return `<div class="plain-line">` +
+      `<span class="lyric-original">${escapeHtml(text)}</span>` +
+      `<span class="lyric-translation" data-index="${index}"></span>` +
+      `</div>`;
+  }).join('');
+
+  lyricsContainer.innerHTML = `<div class="lyrics-text">${html}</div>`;
 }
 
 // Atualizar destaque das letras sincronizadas
@@ -175,6 +222,29 @@ pinButton.addEventListener('click', async () => {
   isPinned = await window.electronAPI.toggleAlwaysOnTop();
   pinButton.classList.toggle('pinned', isPinned);
   pinButton.title = isPinned ? 'Fixado no topo' : 'Não fixado';
+});
+
+// Mostrar/ocultar a tradução (preferência persistida entre sessões)
+let translationEnabled = localStorage.getItem('translationEnabled') !== 'false';
+
+function applyTranslationPreference() {
+  lyricsContainer.classList.toggle('translation-hidden', !translationEnabled);
+  translateButton.classList.toggle('pinned', translationEnabled);
+  translateButton.title = translationEnabled
+    ? 'Tradução (pt-BR) ativada'
+    : 'Tradução (pt-BR) desativada';
+}
+
+applyTranslationPreference();
+window.electronAPI.setTranslationEnabled(translationEnabled);
+
+translateButton.addEventListener('click', async () => {
+  translationEnabled = !translationEnabled;
+  localStorage.setItem('translationEnabled', String(translationEnabled));
+  applyTranslationPreference();
+
+  // Ao reativar, o processo principal retraduz a letra já exibida
+  await window.electronAPI.setTranslationEnabled(translationEnabled);
 });
 
 // Recarregar letra manualmente (fallback caso algo tenha falhado)
